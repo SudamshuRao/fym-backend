@@ -21,7 +21,12 @@ class RecommendedItem(BaseModel):
     fat: Optional[float]
     cal: Optional[float]
     fit_score: float  # lower is better; 0 = exact match
+    restaurant_nutrition_id: str  # needed to accept this specific item
 
 
 class EatOutRecommendationOut(BaseModel):
     results: list[RecommendedItem]
+
+
+class AcceptEatOutRequest(BaseModel):
+    restaurant_nutrition_id: str

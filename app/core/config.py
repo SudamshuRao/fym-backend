@@ -22,5 +22,9 @@ class Settings(BaseSettings):
     app_name: str = "FYM (Fit Your Macros)"
     debug: bool = True
 
+    # Ollama (local, free LLM inference - used for recipe generation)
+    ollama_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3.1"
+
 
 settings = Settings()

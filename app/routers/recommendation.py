@@ -1,6 +1,9 @@
 """
 Eat-out recommendation endpoint: given a macro budget, scores every
 cached restaurant menu item against it and returns the best fits.
+Includes an accept endpoint that logs the chosen item using its macros
+looked up fresh from the database - never trusting whatever the client
+might send, consistent with how the rest of this app treats macro data.
 
 This is intentionally the simplest possible version - no location
 lookup, no clarification flow, no attribute-tag filtering yet. Those
@@ -8,19 +11,22 @@ come later in Phase 3. This endpoint proves the core loop works: real
 scraped data -> deterministic scoring -> ranked results.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.budget_split import MacroBudget
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.core.macro_fit import rank_candidates
+from app.models.food_log import FoodLog, FoodLogSource
 from app.models.restaurant_nutrition import RestaurantNutrition
 from app.models.user import User
+from app.schemas.food_log import FoodLogOut
 from app.schemas.recommendation import (
     EatOutRecommendationRequest,
     EatOutRecommendationOut,
     RecommendedItem,
+    AcceptEatOutRequest,
 )
 
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
@@ -60,8 +66,40 @@ def recommend_eat_out(
             fat=macros.fat,
             cal=macros.cal,
             fit_score=round(score, 4),
+            restaurant_nutrition_id=item_id,
         )
         for item_id, macros, score in ranked
     ]
 
     return EatOutRecommendationOut(results=results)
+
+
+@router.post("/eat-out/accept", response_model=FoodLogOut, status_code=201)
+def accept_eat_out_recommendation(
+    payload: AcceptEatOutRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    item = (
+        db.query(RestaurantNutrition)
+        .filter(RestaurantNutrition.id == payload.restaurant_nutrition_id)
+        .first()
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="Menu item not found")
+    if None in (item.protein, item.carb, item.fat, item.cal):
+        raise HTTPException(status_code=422, detail="This menu item is missing macro data and can't be logged")
+
+    entry = FoodLog(
+        user_id=current_user.id,
+        source=FoodLogSource.RECOMMENDED,
+        name=f"{item.name}: {item.menu_item}",
+        protein=item.protein,
+        carb=item.carb,
+        fat=item.fat,
+        cal=item.cal,
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return entry
