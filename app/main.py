@@ -6,7 +6,7 @@ FYM backend entrypoint. Run with:
 from fastapi import FastAPI
 
 from app.core.config import settings
-from app.routers import auth, daily_target, food_log, standalone, recommendation, pantry_item, cook, intent
+from app.routers import auth, daily_target, food_log, standalone, recommendation, pantry_item, cook, intent, personalization
 
 app = FastAPI(title=settings.app_name, debug=settings.debug)
 
@@ -18,6 +18,7 @@ app.include_router(recommendation.router)
 app.include_router(pantry_item.router)
 app.include_router(cook.router)
 app.include_router(intent.router)
+app.include_router(personalization.router)
 
 
 @app.get("/health")

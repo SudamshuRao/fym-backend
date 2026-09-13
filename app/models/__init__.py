@@ -9,6 +9,7 @@ from app.models.food_log import FoodLog, FoodLogSource
 from app.models.pantry_item import PantryItem
 from app.models.preference_summary import PreferenceSummary
 from app.models.restaurant_nutrition import RestaurantNutrition
+from app.models.recommendation_event import RecommendationEvent, RecommendationType
 
 __all__ = [
     "User",
@@ -18,4 +19,6 @@ __all__ = [
     "PantryItem",
     "PreferenceSummary",
     "RestaurantNutrition",
+    "RecommendationEvent",
+    "RecommendationType",
 ]

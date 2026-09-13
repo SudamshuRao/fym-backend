@@ -85,3 +85,36 @@ def rank_candidates(
     scored = [(identifier, macros, score_fit(macros, target, weights)) for identifier, macros in candidates]
     scored.sort(key=lambda triple: triple[2])
     return scored[:limit] if limit is not None else scored
+
+
+def apply_preference_weighting(
+    name: str,
+    base_score: float,
+    preference_summary: dict | None,
+    weight: float = 0.1,
+) -> float:
+    """
+    Nudges a fit score based on the user's PreferenceSummary - a soft
+    adjustment, never a hard filter, per the original design decision.
+    Purely deterministic keyword matching (case-insensitive substring
+    against `prefers`/`avoids` phrases) - the LLM already did its job
+    when the summary was generated; scoring time stays LLM-free.
+
+    Lower score is still better - matching a "prefers" phrase nudges the
+    score down (more favorable), matching "avoids" nudges it up.
+    """
+    if not preference_summary:
+        return base_score
+
+    name_lower = name.lower()
+    adjusted = base_score
+
+    for phrase in preference_summary.get("prefers", []):
+        if phrase.lower() in name_lower:
+            adjusted -= weight
+
+    for phrase in preference_summary.get("avoids", []):
+        if phrase.lower() in name_lower:
+            adjusted += weight
+
+    return max(adjusted, 0.0)  # never let preference weighting push the score negative

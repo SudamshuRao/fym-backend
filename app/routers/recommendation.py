@@ -18,12 +18,15 @@ from sqlalchemy.orm import Session
 from app.core.budget_split import MacroBudget
 from app.core.database import get_db
 from app.core.deps import get_current_user
-from app.core.macro_fit import rank_candidates
+from app.core.macro_fit import score_fit, apply_preference_weighting
 from app.core.overpass_client import find_nearby_chains, OverpassError
 from app.models.food_log import FoodLog, FoodLogSource
+from app.models.preference_summary import PreferenceSummary
+from app.models.recommendation_event import RecommendationEvent, RecommendationType
 from app.models.restaurant_nutrition import RestaurantNutrition
 from app.models.user import User
 from app.schemas.food_log import FoodLogOut
+from app.schemas.personalization import SkipEatOutRequest
 from app.schemas.recommendation import (
     EatOutRecommendationRequest,
     EatOutRecommendationOut,
@@ -70,30 +73,39 @@ def recommend_eat_out(
 
     # Only score items with complete macro data - can't fairly rank
     # something missing a protein/carb/fat value against a full budget.
-    candidates = [
-        (str(item.id), MacroBudget(protein=item.protein, carb=item.carb, fat=item.fat, cal=item.cal))
-        for item in items
-        if None not in (item.protein, item.carb, item.fat, item.cal)
-    ]
-    items_by_id = {str(item.id): item for item in items}
+    scorable_items = [item for item in items if None not in (item.protein, item.carb, item.fat, item.cal)]
 
     target = MacroBudget(protein=payload.protein, carb=payload.carb, fat=payload.fat, cal=payload.cal)
-    ranked = rank_candidates(candidates, target, limit=payload.limit)
+
+    # Fetch the user's preference summary once (soft weighting, never a
+    # hard filter - and completely absent for new users, which is fine).
+    pref_row = db.query(PreferenceSummary).filter(PreferenceSummary.user_id == current_user.id).first()
+    preference_summary = pref_row.summary if pref_row else None
+
+    scored = []
+    for item in scorable_items:
+        macros = MacroBudget(protein=item.protein, carb=item.carb, fat=item.fat, cal=item.cal)
+        base_score = score_fit(macros, target)
+        adjusted_score = apply_preference_weighting(item.menu_item, base_score, preference_summary)
+        scored.append((item, macros, adjusted_score))
+
+    scored.sort(key=lambda triple: triple[2])
+    scored = scored[: payload.limit]
 
     results = [
         RecommendedItem(
-            restaurant_id=items_by_id[item_id].restaurant_id,
-            restaurant_name=items_by_id[item_id].name,
-            menu_item=items_by_id[item_id].menu_item,
+            restaurant_id=item.restaurant_id,
+            restaurant_name=item.name,
+            menu_item=item.menu_item,
             protein=macros.protein,
             carb=macros.carb,
             fat=macros.fat,
             cal=macros.cal,
             fit_score=round(score, 4),
-            restaurant_nutrition_id=item_id,
-            distance_km=distance_by_restaurant_id.get(items_by_id[item_id].restaurant_id),
+            restaurant_nutrition_id=str(item.id),
+            distance_km=distance_by_restaurant_id.get(item.restaurant_id),
         )
-        for item_id, macros, score in ranked
+        for item, macros, score in scored
     ]
 
     return EatOutRecommendationOut(results=results)
@@ -125,6 +137,30 @@ def accept_eat_out_recommendation(
         cal=item.cal,
     )
     db.add(entry)
+
+    db.add(RecommendationEvent(
+        user_id=current_user.id,
+        recommendation_type=RecommendationType.EAT_OUT,
+        identifier=item.menu_item,
+        accepted=True,
+    ))
+
     db.commit()
     db.refresh(entry)
     return entry
+
+
+@router.post("/eat-out/skip", status_code=204)
+def skip_eat_out_recommendation(
+    payload: SkipEatOutRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    db.add(RecommendationEvent(
+        user_id=current_user.id,
+        recommendation_type=RecommendationType.EAT_OUT,
+        identifier=payload.menu_item,
+        accepted=False,
+    ))
+    db.commit()
+    return None

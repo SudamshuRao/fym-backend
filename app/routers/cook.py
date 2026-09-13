@@ -22,9 +22,11 @@ from app.core.recipe_generation import (
 )
 from app.models.food_log import FoodLog, FoodLogSource
 from app.models.pantry_item import PantryItem
+from app.models.recommendation_event import RecommendationEvent, RecommendationType
 from app.models.user import User
 from app.schemas.cook import CookRecommendationRequest, CookRecommendationOut, AcceptCookRequest
 from app.schemas.food_log import FoodLogOut
+from app.schemas.personalization import SkipCookRequest
 
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
 
@@ -123,6 +125,30 @@ def accept_cook_recommendation(
         cal=round(total.cal, 2),
     )
     db.add(entry)
+
+    db.add(RecommendationEvent(
+        user_id=current_user.id,
+        recommendation_type=RecommendationType.COOK,
+        identifier=payload.recipe_name,
+        accepted=True,
+    ))
+
     db.commit()
     db.refresh(entry)
     return entry
+
+
+@router.post("/cook/skip", status_code=204)
+def skip_cook_recommendation(
+    payload: SkipCookRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    db.add(RecommendationEvent(
+        user_id=current_user.id,
+        recommendation_type=RecommendationType.COOK,
+        identifier=payload.recipe_name,
+        accepted=False,
+    ))
+    db.commit()
+    return None
