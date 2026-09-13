@@ -5,10 +5,11 @@ Includes an accept endpoint that logs the chosen item using its macros
 looked up fresh from the database - never trusting whatever the client
 might send, consistent with how the rest of this app treats macro data.
 
-This is intentionally the simplest possible version - no location
-lookup, no clarification flow, no attribute-tag filtering yet. Those
-come later in Phase 3. This endpoint proves the core loop works: real
-scraped data -> deterministic scoring -> ranked results.
+Optionally filters by real-world location: if lat/lon are provided,
+only chains with an actual nearby location (via free OpenStreetMap
+Overpass lookup) are considered - overriding a plain restaurant_id
+filter, since "what's actually near me" is more useful than "search
+this one chain everywhere."
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,6 +19,7 @@ from app.core.budget_split import MacroBudget
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.core.macro_fit import rank_candidates
+from app.core.overpass_client import find_nearby_chains, OverpassError
 from app.models.food_log import FoodLog, FoodLogSource
 from app.models.restaurant_nutrition import RestaurantNutrition
 from app.models.user import User
@@ -39,7 +41,29 @@ def recommend_eat_out(
     db: Session = Depends(get_db),
 ):
     query = db.query(RestaurantNutrition).filter(RestaurantNutrition.status == "ok_structured")
-    if payload.restaurant_id:
+
+    distance_by_restaurant_id = {}
+
+    if payload.lat is not None and payload.lon is not None:
+        # Location overrides a plain restaurant_id filter - "what's near
+        # me" is more useful than "search one specific chain everywhere."
+        known_chains = (
+            db.query(RestaurantNutrition.restaurant_id, RestaurantNutrition.name)
+            .distinct()
+            .all()
+        )
+        try:
+            nearby = find_nearby_chains(payload.lat, payload.lon, payload.radius_km, known_chains)
+        except OverpassError as e:
+            raise HTTPException(status_code=503, detail=str(e))
+
+        if not nearby:
+            return EatOutRecommendationOut(results=[])
+
+        nearby_ids = [r["restaurant_id"] for r in nearby]
+        distance_by_restaurant_id = {r["restaurant_id"]: r["distance_km"] for r in nearby}
+        query = query.filter(RestaurantNutrition.restaurant_id.in_(nearby_ids))
+    elif payload.restaurant_id:
         query = query.filter(RestaurantNutrition.restaurant_id == payload.restaurant_id)
 
     items = query.all()
@@ -67,6 +91,7 @@ def recommend_eat_out(
             cal=macros.cal,
             fit_score=round(score, 4),
             restaurant_nutrition_id=item_id,
+            distance_km=distance_by_restaurant_id.get(items_by_id[item_id].restaurant_id),
         )
         for item_id, macros, score in ranked
     ]

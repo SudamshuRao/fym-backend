@@ -10,6 +10,11 @@ class EatOutRecommendationRequest(BaseModel):
     cal: float
     restaurant_id: Optional[str] = None  # filter to one restaurant if provided
     limit: int = 10
+    # If lat/lon are provided, results are restricted to chains with a
+    # real-world location within radius_km - overrides restaurant_id.
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    radius_km: float = 5.0
 
 
 class RecommendedItem(BaseModel):
@@ -22,6 +27,7 @@ class RecommendedItem(BaseModel):
     cal: Optional[float]
     fit_score: float  # lower is better; 0 = exact match
     restaurant_nutrition_id: str  # needed to accept this specific item
+    distance_km: Optional[float] = None  # only populated when lat/lon were provided
 
 
 class EatOutRecommendationOut(BaseModel):
